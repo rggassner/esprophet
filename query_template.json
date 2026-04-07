@@ -1,0 +1,35 @@
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "range": {
+            "{{TIMESTAMP_FIELD}}": {
+              "gte": "{{ANALYSIS_START}}",
+              "lte": "{{ANALYSIS_END}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "aggs": {
+    "target_grain": {
+      "terms": {
+        "field": "{{GRAIN_FIELD}}",
+        "size": {{AGG_SIZE}},
+        "min_doc_count": {{MIN_DOCS}}
+      },
+      "aggs": {
+        "timeseries": {
+          "date_histogram": {
+            "field": "{{TIMESTAMP_FIELD}}",
+            "fixed_interval": "{{FIXED_INTERVAL}}",
+            "time_zone": "UTC"
+          }
+        }
+      }
+    }
+  }
+}

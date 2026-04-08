@@ -1,12 +1,13 @@
 #!venv/bin/python3
 import pandas as pd
 from prophet import Prophet
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, helpers
 import urllib3
 import matplotlib.pyplot as plt
 import os
 import json
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv() 
@@ -29,6 +30,9 @@ AGG_SIZE = os.getenv("AGG_SIZE", 200)
 MINIMUM_SAMPLES = int(os.getenv("MINIMUM_SAMPLES", 168))
 PLOT_UPPER = os.getenv("PLOT_UPPER_ALERTS", "True") == "True"
 PLOT_LOWER = os.getenv("PLOT_LOWER_ALERTS", "False") == "True"
+ENABLE_ES_INGEST = os.getenv("ENABLE_ES_INGEST", "True") == "True"
+RESULTS_INDEX = os.getenv("RESULTS_INDEX", "anomaly-predictions")
+PREDICT_DAYS = int(os.getenv("PREDICT_FUTURE_DAYS", 7))
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
@@ -39,6 +43,41 @@ es = Elasticsearch(
     verify_certs=False,
     ssl_show_warn=False
 )
+
+def ingest_to_elastic(df_forecast, df_actual, entity_name):
+    # Merge actuals into forecast
+    merged = df_forecast.merge(df_actual[['ds', 'y']], on='ds', how='left')
+    
+    actions = []
+    for _, row in merged.iterrows():
+        timestamp_str = row['ds'].strftime('%Y-%m-%dT%H:%M:%SZ')
+        doc_id = f"{entity_name}_{timestamp_str}".replace(" ", "_")
+
+        # Calculate flags using the exact parameters from your config
+        # Only calculate if we actually have an 'observed' value (row['y'])
+        is_upper = False
+        is_lower = False
+        
+        if pd.notnull(row['y']):
+            is_upper = row['y'] > (row['yhat_upper'] * BUFFER_PERCENT) and row['y'] > MIN_VOLUME_FLOOR
+            is_lower = row['y'] < row['yhat_lower']
+
+        doc = {
+            "_index": RESULTS_INDEX,
+            "_id": doc_id,
+            "@timestamp": row['ds'],
+            "entity_name": entity_name,
+            "observed": row['y'] if pd.notnull(row['y']) else None,
+            "preview": row['yhat'],
+            "min_threshold": row['yhat_lower'],
+            "max_threshold": row['yhat_upper'],
+            "is_upper_anomaly": is_upper,
+            "is_lower_anomaly": is_lower,
+            "model_run_at": datetime.now(timezone.utc)
+        }
+        actions.append(doc)
+
+    helpers.bulk(es, actions)
 
 def load_templated_query():
     with open('query_template.json', 'r') as f:
@@ -102,44 +141,46 @@ def generate_plot(df, forecast, entity_name):
 
 def run_analysis():
     query = load_templated_query()
-    res = es.search(index=INDEX_PATTERN, body=query)
+    res = es.search(index=os.getenv("INDEX_PATTERN"), body=query)
+    
     for bucket in res['aggregations']['target_grain']['buckets']:
         entity_name = bucket['key']
-
-        df = pd.DataFrame([
-            {'ds': b['key_as_string'], 'y': b['doc_count']}
-            for b in bucket['timeseries']['buckets']
-        ])
-
+        df = pd.DataFrame([{'ds': b['key_as_string'], 'y': b['doc_count']} for b in bucket['timeseries']['buckets']])
         df['ds'] = pd.to_datetime(df['ds']).dt.tz_localize(None)
 
-        if len(df) < MINIMUM_SAMPLES:
+        if len(df) < int(os.getenv("MINIMUM_SAMPLES", 168)):
             continue
 
         try:
-            model = Prophet(interval_width=INTERVAL_WIDTH, daily_seasonality=True, weekly_seasonality=False)
+            model = Prophet(interval_width=float(os.getenv("INTERVAL_WIDTH", 0.99)), 
+                            daily_seasonality=True, weekly_seasonality=False)
             model.add_seasonality(name='weekly', period=7, fourier_order=10)
+            
+            # 1. Fit model on all available data
+            model.fit(df)
 
-            train = df.iloc[:-24]
-            model.fit(train)
+            # 2. Create Future Dataframe (Historic + Upcoming Week)
+            future = model.make_future_dataframe(periods=24 * PREDICT_DAYS, freq='h')
+            forecast = model.predict(future)
 
-            forecast = model.predict(df[['ds']])
+            # 3. Anomaly Check (Last 24h of actuals)
             check = df.iloc[-24:].merge(forecast[['ds', 'yhat_upper', 'yhat_lower']], on='ds')
-
-            # Use variables from config
-            check['is_anomaly'] = (
-                (check['y'] > (check['yhat_upper'] * BUFFER_PERCENT)) &
-                (check['y'] > MIN_VOLUME_FLOOR)
-            )
-
-            check['is_drop'] = (check['y'] < check['yhat_lower']) & (check['yhat_lower'] > 10)
-
-            if check['is_anomaly'].any() or check['is_drop'].any():
-                print(f"Significant Alert for {entity_name}!")
+            check['is_anomaly'] = (check['y'] > (check['yhat_upper'] * float(os.getenv("BUFFER_PERCENT", 1.2))))
+            
+            if check['is_anomaly'].any():
                 generate_plot(df, forecast, entity_name)
+
+            # 4. Global Flag for Elastic Ingestion
+            if ENABLE_ES_INGEST:
+                print(f"Pushing data for {entity_name} to {RESULTS_INDEX}...")
+                ingest_to_elastic(forecast, df, entity_name)
 
         except Exception as e:
             print(f"Error on {entity_name}: {e}")
 
 if __name__ == "__main__":
     run_analysis()
+
+#TODO
+#Create a key for source index/field
+#Option to toggle graph generation on and off

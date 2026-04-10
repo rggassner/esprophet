@@ -155,6 +155,33 @@ def generate_plot(df, forecast, entity_name):
     plt.close()
 
 def run_analysis():
+    """
+    Orchestrates the end-to-end anomaly detection pipeline for all target entities.
+
+    The process follows a five-step lifecycle:
+    1.  **Ingestion:** Executes a templated Elasticsearch aggregation to fetch 
+        time-series data for the top N entities (defined by GRAIN_FIELD).
+    2.  **Preprocessing:** Converts raw ES buckets into a Pandas DataFrame and 
+        validates against MINIMUM_SAMPLES to ensure statistical relevance.
+    3.  **Modeling:** Fits a Facebook Prophet model with hourly granularity, 
+        accounting for daily and weekly seasonality patterns.
+    4.  **Forecasting:** Generates a historical "preview" and a future projection 
+        extending PREDICT_DAYS into the future.
+    5.  **Output:** Standardizes results into the RESULTS_INDEX via bulk ingestion 
+        and optionally renders debug plots if an anomaly is detected in the 
+        trailing 24-hour window.
+
+    Global Settings (via .env):
+        INDEX_PATTERN (str): The source log index to query.
+        MINIMUM_SAMPLES (int): Minimum hourly data points required to train.
+        PREDICT_DAYS (int): How many days to forecast beyond the current time.
+        ENABLE_ES_INGEST (bool): Toggle for pushing results back to Elasticsearch.
+        GENERATE_PLOTS (bool): Toggle for saving PNG visualizations.
+
+    Raises:
+        Exception: Catches and logs per-entity failures during modeling or 
+            ingestion to prevent a single failure from halting the entire batch.
+    """
     query = load_templated_query()
     res = es.search(index=os.getenv("INDEX_PATTERN"), body=query)
 

@@ -101,6 +101,57 @@ def load_templated_query():
     return json.loads(query_str)
 
 def generate_plot(df, forecast, entity_name):
+    """
+    Generate and save a time-series visualization comparing observed data
+    against Prophet forecast predictions, including anomaly highlighting.
+
+    This function produces a PNG plot per entity, showing:
+    - Actual observed values over time
+    - Forecasted trend (yhat)
+    - Expected value range (yhat_lower to yhat_upper) as a confidence band
+    - Optional anomaly markers for values outside expected bounds
+
+    Visualization Features:
+        - Upper anomalies (spikes) are flagged when observed values exceed
+          yhat_upper multiplied by BUFFER_PERCENT.
+        - Lower anomalies (drops) are flagged when observed values fall below
+          yhat_lower.
+        - A summary statistic (total document count) is displayed on the plot.
+        - Output is saved to OUTPUT_DIR using a sanitized entity-based filename.
+
+    Args:
+        df (pandas.DataFrame):
+            Historical observed data with the following columns:
+                - 'ds' (datetime): Timestamp of the observation
+                - 'y' (float/int): Observed value (e.g., document count)
+
+        forecast (pandas.DataFrame):
+            Prophet forecast output containing:
+                - 'ds' (datetime): Timestamp
+                - 'yhat' (float): Predicted value
+                - 'yhat_lower' (float): Lower confidence bound
+                - 'yhat_upper' (float): Upper confidence bound
+
+        entity_name (str):
+            Identifier for the entity being plotted (e.g., hostname, service).
+            Used in the plot title and output filename.
+
+    Global Dependencies:
+        OUTPUT_DIR (str): Directory where plots are saved
+        BUFFER_PERCENT (float): Multiplier for upper anomaly sensitivity
+        PLOT_UPPER (bool): Toggle for plotting upper anomalies
+        PLOT_LOWER (bool): Toggle for plotting lower anomalies
+
+    Output:
+        Saves a PNG file named "<entity_name>.png" in OUTPUT_DIR.
+
+    Notes:
+        - The function does not return any value.
+        - Datetime values are expected to be timezone-naive and aligned
+          between df and forecast.
+        - Designed for debugging and visual validation of anomaly detection
+          behavior in the forecasting pipeline.
+    """
     plt.figure(figsize=(18, 6))
     total_docs = df['y'].sum()
 

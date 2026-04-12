@@ -89,6 +89,45 @@ def ingest_to_elastic(df_forecast, df_actual, entity_name):
         print(f"Failed to bulk ingest for {entity_name}: {e}")
 
 def load_templated_query():
+    """
+    Load and render the Elasticsearch query template by replacing placeholder
+    variables with runtime configuration values.
+
+    This function reads a JSON query template from 'query_template.json' and
+    dynamically injects environment-specific parameters such as time range,
+    aggregation fields, and thresholds. The resulting query is returned as a
+    Python dictionary ready to be executed via the Elasticsearch client.
+
+    Template Placeholders Replaced:
+        {{TIMESTAMP_FIELD}}  → Field used for time-based aggregation
+        {{GRAIN_FIELD}}      → Field used for entity grouping (e.g., dest_host)
+        {{MIN_DOCS}}         → Minimum document threshold for filtering
+        {{ANALYSIS_START}}   → Start of the analysis time window
+        {{ANALYSIS_END}}     → End of the analysis time window
+        {{FIXED_INTERVAL}}   → Aggregation interval (e.g., 1h)
+        {{AGG_SIZE}}         → Number of top entities to retrieve
+
+    Returns:
+        dict:
+            Parsed Elasticsearch query body with all placeholders resolved,
+            ready to be passed to es.search().
+
+    Raises:
+        FileNotFoundError:
+            If 'query_template.json' is not found in the working directory.
+        json.JSONDecodeError:
+            If the template file contains invalid JSON.
+        Exception:
+            For any unexpected errors during file reading or processing.
+
+    Notes:
+        - All replacement values are sourced from environment variables.
+        - This function assumes placeholders exist exactly as defined; missing
+          or misspelled placeholders will not raise errors but may result in
+          malformed queries.
+        - Designed to decouple query structure from runtime configuration,
+          making tuning and reuse easier across environments.
+    """
     with open('query_template.json', 'r', encoding='utf-8') as f:
         query_str = f.read()
     query_str = query_str.replace("{{TIMESTAMP_FIELD}}", TIMESTAMP)

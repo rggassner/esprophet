@@ -1,5 +1,99 @@
 #!venv/bin/python3
 #pylint: disable=broad-exception-caught
+"""
+End-to-End Time-Series Anomaly Detection Pipeline using Elasticsearch and Prophet.
+
+This script implements a scalable anomaly detection workflow for time-series data
+stored in Elasticsearch. It retrieves aggregated metrics, builds forecasting models
+per entity, detects anomalies based on statistical thresholds, and optionally
+stores results back into Elasticsearch and generates diagnostic plots.
+
+Core Workflow:
+    1. Query Generation:
+        - Loads a templated Elasticsearch query from disk.
+        - Dynamically injects runtime parameters via environment variables.
+
+    2. Data Retrieval:
+        - Executes aggregation queries against Elasticsearch to extract
+          time-series data grouped by a specified "grain" (e.g., dest_host).
+
+    3. Preprocessing:
+        - Converts aggregation buckets into Pandas DataFrames.
+        - Ensures sufficient data points (MINIMUM_SAMPLES) for modeling.
+
+    4. Forecasting:
+        - Trains a Prophet model per entity with hourly granularity.
+        - Incorporates daily and weekly seasonality.
+        - Produces both historical predictions and future forecasts.
+
+    5. Anomaly Detection:
+        - Upper anomalies: observed values exceeding forecast upper bound
+          scaled by BUFFER_PERCENT.
+        - Lower anomalies: observed values falling below forecast lower bound.
+
+    6. Result Ingestion:
+        - Merges observed and predicted data.
+        - Generates structured documents with anomaly flags.
+        - Bulk indexes results into Elasticsearch (RESULTS_INDEX).
+
+    7. Visualization (Optional):
+        - Generates time-series plots for entities with recent anomalies.
+        - Highlights observed values, forecast trends, confidence intervals,
+          and anomaly points.
+
+Configuration (via .env):
+    ES_HOST (str): Elasticsearch endpoint
+    ES_USER (str): Elasticsearch username
+    ES_PASS (str): Elasticsearch password
+    INDEX_PATTERN (str): Source index pattern (e.g., logs-waf-prod*)
+    RESULTS_INDEX (str): Target index for anomaly results
+    GRAIN_FIELD (str): Aggregation field (e.g., dest_host)
+    TIMESTAMP_FIELD (str): Time field used for analysis
+    MIN_DOCS (int): Minimum documents required to include an entity
+    MINIMUM_SAMPLES (int): Minimum time points required for modeling
+    FIXED_INTERVAL (str): Aggregation interval (e.g., 1h)
+    AGG_SIZE (int): Number of top entities to analyze
+    ANALYSIS_START (str): Start time window (e.g., now-30d)
+    ANALYSIS_END (str): End time window (e.g., now-1h)
+    BUFFER_PERCENT (float): Sensitivity multiplier for upper anomalies
+    INTERVAL_WIDTH (float): Prophet confidence interval width
+    PREDICT_FUTURE_DAYS (int): Number of days to forecast ahead
+    ENABLE_ES_INGEST (bool): Enable ingestion of results into Elasticsearch
+    GENERATE_PLOTS (bool): Enable generation of anomaly plots
+    PLOT_UPPER_ALERTS (bool): Toggle upper anomaly visualization
+    PLOT_LOWER_ALERTS (bool): Toggle lower anomaly visualization
+    OUTPUT_DIR (str): Directory for saving generated plots
+
+Dependencies:
+    - Elasticsearch: Data source and sink
+    - Prophet: Time-series forecasting model
+    - Pandas: Data manipulation
+    - Matplotlib: Visualization
+    - python-dotenv: Environment configuration management
+
+Outputs:
+    - Elasticsearch documents containing:
+        - Observed values
+        - Forecast predictions
+        - Confidence bounds
+        - Anomaly flags (upper/lower)
+        - Metadata for traceability
+    - Optional PNG plots for anomaly inspection
+
+Design Notes:
+    - The pipeline is resilient to per-entity failures; errors are logged and
+      processing continues.
+    - Document IDs are deterministic, preventing duplication across runs.
+    - The system is designed for batch execution (e.g., cron jobs or schedulers).
+    - Forecasting is performed independently per entity for scalability.
+
+Typical Use Case:
+    Monitoring log volume patterns (e.g., WAF logs per host) to detect unusual
+    spikes or drops that may indicate attacks, outages, or misconfigurations.
+
+Entry Point:
+    The script executes run_analysis() when run as the main module.
+"""
 import os
 import json
 from datetime import datetime, timezone

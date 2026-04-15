@@ -46,6 +46,65 @@ es = Elasticsearch(
 )
 
 def ingest_to_elastic(df_forecast, df_actual, entity_name):
+    """
+    Ingest forecast results and observed data into Elasticsearch as structured
+    anomaly detection documents.
+
+    This function merges Prophet forecast output with actual observed values,
+    evaluates anomaly conditions, and performs bulk indexing into the configured
+    Elasticsearch index. Each document represents a single timestamped data point
+    for a given entity, enriched with prediction bounds and anomaly flags.
+
+    Processing Steps:
+        1. Merge forecast (yhat, bounds) with actual observations (y).
+        2. Generate a unique document ID per entity and timestamp to prevent
+           duplication and ensure idempotency.
+        3. Evaluate anomaly conditions:
+            - Upper anomaly: observed > yhat_upper * BUFFER_PERCENT
+            - Lower anomaly: observed < yhat_lower
+        4. Construct normalized documents with forecast, thresholds, and metadata.
+        5. Bulk ingest documents into Elasticsearch using helpers.bulk().
+
+    Args:
+        df_forecast (pandas.DataFrame):
+            Prophet forecast DataFrame containing:
+                - 'ds' (datetime): Timestamp
+                - 'yhat' (float): Predicted value
+                - 'yhat_lower' (float): Lower confidence bound
+                - 'yhat_upper' (float): Upper confidence bound
+
+        df_actual (pandas.DataFrame):
+            Observed data containing:
+                - 'ds' (datetime): Timestamp
+                - 'y' (float/int): Observed value
+
+        entity_name (str):
+            Identifier for the entity (e.g., hostname, service name).
+            Used for document partitioning and ID generation.
+
+    Global Dependencies:
+        es (Elasticsearch): Initialized Elasticsearch client
+        RESULTS_INDEX (str): Target index for anomaly documents
+        INDEX_PATTERN (str): Source index pattern for traceability
+        GRAIN (str): Field representing the aggregation grain
+        BUFFER_PERCENT (float): Multiplier for upper anomaly sensitivity
+
+    Output:
+        None. Documents are indexed directly into Elasticsearch.
+
+    Raises:
+        Exception:
+            Catches and logs bulk ingestion failures without interrupting
+            the overall processing pipeline.
+
+    Notes:
+        - Document IDs are normalized to avoid invalid characters by replacing
+          dots and spaces with underscores.
+        - Missing observed values (NaN) result in anomaly flags being set to False.
+        - Boolean fields are explicitly cast to Python bool to ensure proper
+          Elasticsearch mapping (avoiding numpy.bool_ issues).
+        - Designed for high-throughput ingestion using Elasticsearch bulk API.
+    """
     # Merge actuals (y) into forecast (yhat)
     merged = df_forecast.merge(df_actual[['ds', 'y']], on='ds', how='left')
 
